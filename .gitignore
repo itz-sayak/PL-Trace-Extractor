@@ -1,0 +1,28 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Output files (large/generated)
+*.mp4
+*.avi
+*.tif
+*.tiff
+traces*.csv
+
+# Generated figures (optional - remove these lines if you want to include them)
+*_figs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
