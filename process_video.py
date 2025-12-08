@@ -280,6 +280,30 @@ def run_pipeline(path, out_csv=None, radius=3, min_sigma=1, max_sigma=5, thresho
             y, x = float(coord[0]), float(coord[1])
             # shift is already applied to frames, so coords measured on avg image are valid
             signal, bmed, net = aperture_photometry(frm, (y, x), radius)
+
+            # Localization uncertainty (sigma) calculation
+            # Using formula (from provided reference image):
+            # sigma = sqrt( s^2 / N + (a^2/12) / N + (4 * sqrt(pi) * s^3 * b^2) / (a * N^2) )
+            # where:
+            #  s = PSF Gaussian sigma (px) -> estimated from detected radius: s = rad / sqrt(2)
+            #  N = total photons (we use net signal as estimate)
+            #  b = background per pixel (we use bg_median)
+            #  a = pixel size (px) — default 1.0 unless overridden via CLI
+            try:
+                s = float(rad) / np.sqrt(2.0)
+                N = float(net)
+                b = float(bmed)
+                a = float(run_pipeline._px_size) if hasattr(run_pipeline, '_px_size') else 1.0
+                if N > 0:
+                    term1 = (s ** 2) / N
+                    term2 = (a ** 2 / 12.0) / N
+                    term3 = (4.0 * np.sqrt(np.pi) * (s ** 3) * (b ** 2)) / (a * (N ** 2))
+                    loc_sigma = float(np.sqrt(max(0.0, term1 + term2 + term3)))
+                else:
+                    loc_sigma = float('nan')
+            except Exception:
+                loc_sigma = float('nan')
+
             rows.append({
                 'frame': int(fid),
                 'spot_id': int(sid),
@@ -288,7 +312,8 @@ def run_pipeline(path, out_csv=None, radius=3, min_sigma=1, max_sigma=5, thresho
                 'radius': float(radius),
                 'raw_signal': float(signal),
                 'bg_median': float(bmed),
-                'net_signal': float(net)
+                'net_signal': float(net),
+                'loc_uncertainty': loc_sigma
             })
 
     df = pd.DataFrame(rows)
@@ -341,10 +366,12 @@ def parse_args():
     p.add_argument('--input', '-i', required=True, help='Input video/multipage TIFF (path)')
     p.add_argument('--output', '-o', required=False, help='Output CSV path (default: <input>_traces.csv)')
     p.add_argument('--fps', type=float, default=None, help='Target frame rate (fps). If set, subsamples video to this rate.')
+    p.add_argument('--px-size', type=float, default=1.0, help='Pixel size `a` used in localization uncertainty formula (units: pixels).')
     p.add_argument('--radius', type=int, default=3, help='Aperture radius (pixels)')
     p.add_argument('--min-sigma', type=float, default=1.0, help='Min sigma for blob detection')
     p.add_argument('--max-sigma', type=float, default=4.0, help='Max sigma for blob detection')
-    p.add_argument('--threshold', type=float, default=0.02, help='Normalized threshold for blob detection (0..1)')
+    p.add_argument('--threshold', type=float, default=None, help='Normalized threshold for blob detection (0..1). Overrides --sensitivity if set.')
+    p.add_argument('--sensitivity', type=float, default=50.0, help='Detection sensitivity 0-100 (higher=more spots). Maps to threshold internally.')
     p.add_argument('--upsample', type=int, default=10, help='Upsample factor for subpixel registration')
     p.add_argument('--no-plot', dest='plot', action='store_false', help='Do not write plots')
     return p.parse_args()
@@ -352,8 +379,25 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
+    
+    # Convert sensitivity (0-100) to threshold (0.1 - 0.005)
+    # Higher sensitivity -> lower threshold -> more spots detected
+    # sensitivity=0 -> threshold=0.10 (very few spots)
+    # sensitivity=50 -> threshold=0.02 (default)
+    # sensitivity=100 -> threshold=0.005 (many spots)
+    if args.threshold is not None:
+        threshold = args.threshold
+    else:
+        # Map sensitivity [0, 100] to threshold [0.10, 0.005] (log scale)
+        sens = max(0.0, min(100.0, args.sensitivity))
+        threshold = 0.10 * (0.05 ** (sens / 100.0))
+    
+    print(f"Detection sensitivity: {args.sensitivity:.1f} -> threshold: {threshold:.4f}")
+    
+    # store pixel size on run_pipeline function so inner loop can access without changing signatures
+    run_pipeline._px_size = args.px_size
     df, shifts = run_pipeline(args.input, out_csv=args.output, radius=args.radius,
                               min_sigma=args.min_sigma, max_sigma=args.max_sigma,
-                              threshold=args.threshold, upsample=args.upsample,
+                              threshold=threshold, upsample=args.upsample,
                               fps=args.fps, verbose=True)
     print('Done.')
