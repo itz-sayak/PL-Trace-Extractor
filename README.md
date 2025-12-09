@@ -183,7 +183,7 @@ Install with `pip install -r requirements.txt`.
 
 If you find issues or want to contribute, please open an issue or pull request on GitHub: https://github.com/itz-sayak/PL-Trace-Extractor
 
-If you'd like, I can also:
+Future TODO:
 - Run the pipeline on your primary dataset and attach the labeled video + a mapping table of `spot_id -> (x,y)` and example traces.
 - Add a short README subsection describing how to visually relabel or exclude spots manually.
 
