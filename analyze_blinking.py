@@ -264,27 +264,28 @@ def analyze_spot(df_spot, spot_id, on_thresh_frac, off_thresh_frac, frame_time=1
     }
     
     # Create comprehensive figure using GridSpec for flexible layout
-    fig = plt.figure(figsize=(16, 12))
-    fig.suptitle(f'Blinking Analysis — SPOT #{spot_id}', fontsize=14, fontweight='bold', y=0.98)
+    fig = plt.figure(figsize=(18, 16))
+    fig.suptitle(f'Blinking Analysis — SPOT #{spot_id}', fontsize=16, fontweight='bold', y=0.98)
     
     import matplotlib.gridspec as gridspec
-    gs = gridspec.GridSpec(3, 3, figure=fig, hspace=0.35, wspace=0.3)
+    gs = gridspec.GridSpec(4, 3, figure=fig, hspace=0.45, wspace=0.35,
+                           height_ratios=[1, 1, 1, 1])
     
     # 1. Trace with states (top row, full width)
     ax_trace = fig.add_subplot(gs[0, :])
     plot_trace_with_states(frames, intensity, states, thresholds, spot_id, ax=ax_trace)
     
-    # 2. Histograms (middle row)
+    # 2. Histograms (second row, each in its own cell with more space)
     ax_on = fig.add_subplot(gs[1, 0])
     ax_off = fig.add_subplot(gs[1, 1])
     ax_gray = fig.add_subplot(gs[1, 2])
     plot_dwell_histograms(dwell_times, spot_id, frame_time, ax_on, ax_off, ax_gray)
     
-    # 3. Probability density (bottom left, spans 2 columns)
+    # 3. Probability density (third row, spans 2 columns)
     ax_pdf = fig.add_subplot(gs[2, 0:2])
     plot_probability_density(dwell_times, spot_id, frame_time, ax=ax_pdf)
     
-    # 4. State pie chart (bottom right)
+    # 4. State pie chart (third row, right)
     ax_pie = fig.add_subplot(gs[2, 2])
     state_counts = [np.sum(states == s) for s in ['ON', 'OFF', 'GRAY']]
     colors_pie = ['green', 'red', 'gray']
