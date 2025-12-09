@@ -30,24 +30,45 @@ from scipy import stats
 def classify_states(intensity, on_thresh_frac=0.5, off_thresh_frac=0.2):
     """
     Classify intensity trace into ON / OFF / GRAY states.
-    
-    Args:
-        intensity: 1D array of intensity values
-        on_thresh_frac: fraction of (max - baseline) above which state is ON
-        off_thresh_frac: fraction of (max - baseline) below which state is OFF
-        
+
+    Gray time definition, threshold computation, defaults, and usage:
+
+    - Gray time: consecutive frames with intensity between OFF and ON
+      thresholds (neither confidently OFF nor ON). Gray dwell times are
+      recorded as GRAY events.
+
+    - Threshold computation (implemented here):
+        baseline = 10th percentile of the trace intensity
+        max_int  = 95th percentile of the trace intensity
+        dynamic_range = max_int - baseline
+        OFF threshold = baseline + off_thresh_frac * dynamic_range
+        ON  threshold = baseline + on_thresh_frac  * dynamic_range
+
+      Frames with intensity <= OFF threshold => OFF
+      Frames with intensity >= ON threshold  => ON
+      Frames with intensity between thresholds => GRAY
+
+    - Defaults: on_thresh_frac=0.5 (50%), off_thresh_frac=0.2 (20%)
+
+    - Change thresholds via CLI: `--on-thresh` and `--off-thresh` when
+      running `analyze_blinking.py`.
+
+    - Dwell times are counted in frames; convert to seconds with
+      `--frame-time <seconds_per_frame>`.
+
     Returns:
-        states: array of same length with values 'ON', 'OFF', 'GRAY'
-        thresholds: dict with 'on_threshold', 'off_threshold', 'baseline', 'max_int'
+        states: array of labels ('ON', 'OFF', 'GRAY')
+        thresholds: dict with keys 'on_threshold','off_threshold','baseline','max_int'
     """
+
     intensity = np.asarray(intensity, dtype=float)
-    
+
     # Estimate baseline (background) as lower percentile
     baseline = np.percentile(intensity, 10)
     max_int = np.percentile(intensity, 95)  # Use 95th percentile to avoid outliers
-    
+
     dynamic_range = max_int - baseline
-    
+
     if dynamic_range <= 0:
         # No blinking detected, all OFF or constant
         return np.array(['OFF'] * len(intensity)), {
@@ -56,22 +77,22 @@ def classify_states(intensity, on_thresh_frac=0.5, off_thresh_frac=0.2):
             'baseline': baseline,
             'max_int': max_int
         }
-    
+
     on_threshold = baseline + on_thresh_frac * dynamic_range
     off_threshold = baseline + off_thresh_frac * dynamic_range
-    
+
     states = np.empty(len(intensity), dtype=object)
     states[intensity >= on_threshold] = 'ON'
     states[intensity <= off_threshold] = 'OFF'
     states[(intensity > off_threshold) & (intensity < on_threshold)] = 'GRAY'
-    
+
     thresholds = {
         'on_threshold': on_threshold,
         'off_threshold': off_threshold,
         'baseline': baseline,
         'max_int': max_int
     }
-    
+
     return states, thresholds
 
 
