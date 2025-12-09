@@ -123,6 +123,52 @@ python process_video.py --input Perovskite.mp4 --output traces_full.csv --fps 10
 python visualize_gauss_fit.py --input Perovskite.mp4 --spot 3 --frame 0 --save
 ```
 
+- Analyze blinking statistics for specific spots:
+
+```powershell
+python analyze_blinking.py --input traces_gauss.csv --spots 0,3,6 --save --summary
+```
+
+---
+
+## Blinking analysis (`analyze_blinking.py`)
+
+Classifies intensity traces into **ON / OFF / GRAY** states and computes dwell-time statistics.
+
+### Features
+
+- **State classification**: Uses intensity thresholds (configurable) to label each frame as ON, OFF, or GRAY
+- **Dwell-time histograms**: Histogram of consecutive frames spent in each state
+- **Probability density plots**: PDF comparison of ON vs OFF dwell times (with KDE overlay)
+- **State distribution pie chart**: Visual breakdown of time spent in each state
+- **Summary CSV**: Table of statistics for all analyzed spots
+
+### CLI options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--input, -i` | (required) | Input traces CSV |
+| `--spots, -s` | all | Comma-separated spot IDs (e.g. `--spots 0,3,5`) |
+| `--on-thresh` | 0.5 | ON threshold (fraction of dynamic range) |
+| `--off-thresh` | 0.2 | OFF threshold (fraction of dynamic range) |
+| `--frame-time` | 1.0 | Time per frame (for axis labels) |
+| `--save` | False | Save figures to `blinking_figs/` |
+| `--output-dir` | `blinking_figs` | Output directory |
+| `--summary` | False | Print and save summary statistics |
+
+### Example
+
+```powershell
+# Analyze spots 0, 3, 6 with custom thresholds
+python analyze_blinking.py --input traces_gauss.csv --spots 0,3,6 --on-thresh 0.5 --off-thresh 0.2 --save --summary
+```
+
+Output figures are saved as `blinking_figs/blinking_SPOT{ID}.png` and include:
+1. Intensity trace colored by state (green=ON, red=OFF, gray=GRAY)
+2. Histograms of ON time, OFF time, and GRAY time
+3. Probability density comparison of ON vs OFF dwell times
+4. Pie chart of state distribution
+
 ---
 
 ## Dependencies
