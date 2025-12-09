@@ -26,6 +26,7 @@ from skimage.registration import phase_cross_correlation
 from scipy.ndimage import shift as ndi_shift
 from skimage.feature import blob_log
 from scipy.ndimage import gaussian_filter, median_filter
+from scipy.optimize import curve_fit
 
 
 def read_frames(path, target_fps=None):
@@ -183,8 +184,94 @@ def aperture_photometry(frame, yx, radius):
     return float(signal), float(b_med), float(net)
 
 
-def render_frame_with_spots(frame, coords, circle_radius=8, color=(0, 0, 255), thickness=1):
-    """Render a single frame with detected spots overlaid as circles.
+def gaussian_2d(coords, amplitude, x0, y0, sigma, offset):
+    """2D Gaussian function for curve fitting.
+    
+    Args:
+        coords: tuple of (x, y) meshgrid arrays
+        amplitude: peak amplitude above offset
+        x0, y0: center coordinates
+        sigma: Gaussian sigma (assumes symmetric PSF)
+        offset: constant background offset
+    
+    Returns:
+        Flattened 1D array of Gaussian values
+    """
+    x, y = coords
+    g = offset + amplitude * np.exp(-((x - x0)**2 + (y - y0)**2) / (2 * sigma**2))
+    return g.ravel()
+
+
+def fit_gaussian_2d(frame, yx, fit_radius=5):
+    """Fit a 2D Gaussian PSF to a spot in a frame.
+    
+    Args:
+        frame: 2D image array
+        yx: (y, x) approximate center coordinates
+        fit_radius: half-size of fitting window (pixels)
+    
+    Returns:
+        dict with keys: 'x', 'y', 'amplitude', 'sigma', 'background', 'success'
+        If fit fails, returns dict with success=False and NaN values.
+    """
+    H, W = frame.shape
+    y0_init, x0_init = yx
+    
+    # Extract sub-image around spot
+    y1 = max(0, int(np.floor(y0_init - fit_radius)))
+    y2 = min(H, int(np.ceil(y0_init + fit_radius) + 1))
+    x1 = max(0, int(np.floor(x0_init - fit_radius)))
+    x2 = min(W, int(np.ceil(x0_init + fit_radius) + 1))
+    
+    sub = frame[y1:y2, x1:x2].astype(np.float64)
+    
+    if sub.size < 9:  # too small
+        return {'x': np.nan, 'y': np.nan, 'amplitude': np.nan, 
+                'sigma': np.nan, 'background': np.nan, 'success': False}
+    
+    # Create coordinate grids (in original image coordinates)
+    yy, xx = np.mgrid[y1:y2, x1:x2]
+    
+    # Initial guesses
+    offset_init = np.percentile(sub, 10)
+    amp_init = sub.max() - offset_init
+    sigma_init = 1.5
+    
+    # Bounds: amplitude > 0, sigma in [0.5, 10], offset >= 0
+    bounds_lower = [0, x1, y1, 0.3, 0]
+    bounds_upper = [np.inf, x2, y2, 10.0, np.inf]
+    
+    try:
+        popt, pcov = curve_fit(
+            gaussian_2d,
+            (xx, yy),
+            sub.ravel(),
+            p0=[amp_init, x0_init, y0_init, sigma_init, offset_init],
+            bounds=(bounds_lower, bounds_upper),
+            maxfev=500
+        )
+        amplitude, x_fit, y_fit, sigma_fit, bg_fit = popt
+        
+        # Sanity check: fitted center should be within sub-image
+        if x1 <= x_fit <= x2 and y1 <= y_fit <= y2 and sigma_fit > 0.3:
+            return {
+                'x': float(x_fit),
+                'y': float(y_fit),
+                'amplitude': float(amplitude),
+                'sigma': float(sigma_fit),
+                'background': float(bg_fit),
+                'success': True
+            }
+    except Exception:
+        pass
+    
+    # Fit failed
+    return {'x': np.nan, 'y': np.nan, 'amplitude': np.nan,
+            'sigma': np.nan, 'background': np.nan, 'success': False}
+
+
+def render_frame_with_spots(frame, coords, circle_radius=8, color=(0, 0, 255), thickness=1, show_labels=True):
+    """Render a single frame with detected spots overlaid as circles and labels.
     
     Args:
         frame: 2D grayscale image (float32)
@@ -192,6 +279,7 @@ def render_frame_with_spots(frame, coords, circle_radius=8, color=(0, 0, 255), t
         circle_radius: radius of circles to draw (pixels)
         color: BGR color tuple for circles
         thickness: line thickness for circles
+        show_labels: if True, add spot ID numbers next to circles
     
     Returns:
         RGB uint8 image with circles drawn
@@ -205,10 +293,16 @@ def render_frame_with_spots(frame, coords, circle_radius=8, color=(0, 0, 255), t
     # Convert grayscale to BGR for colored circles
     img_bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     
-    # Draw circles at each spot location
-    for (y, x) in coords:
+    # Draw circles and labels at each spot location
+    for idx, (y, x) in enumerate(coords):
         center = (int(round(x)), int(round(y)))  # cv2 uses (x, y) order
         cv2.circle(img_bgr, center, circle_radius, color, thickness)
+        
+        if show_labels:
+            # Add spot ID label slightly offset from center
+            label_pos = (int(round(x)) + circle_radius + 2, int(round(y)) - 2)
+            cv2.putText(img_bgr, str(idx), label_pos, cv2.FONT_HERSHEY_SIMPLEX, 
+                        0.35, (0, 255, 255), 1, cv2.LINE_AA)  # yellow text
     
     return img_bgr
 
@@ -274,25 +368,36 @@ def run_pipeline(path, out_csv=None, radius=3, min_sigma=1, max_sigma=5, thresho
 
     # prepare DataFrame for traces
     rows = []
-    for fid in tqdm(range(n_frames), desc='Photometry'):  # iterate frames
+    for fid in tqdm(range(n_frames), desc='Photometry + Gaussian fit'):  # iterate frames
         frm = aligned[fid]
         for sid, (coord, rad) in enumerate(zip(coords, radii)):
             y, x = float(coord[0]), float(coord[1])
             # shift is already applied to frames, so coords measured on avg image are valid
             signal, bmed, net = aperture_photometry(frm, (y, x), radius)
 
+            # 2D Gaussian PSF fitting for sub-pixel localization
+            gauss_result = fit_gaussian_2d(frm, (y, x), fit_radius=max(5, int(radius * 2)))
+
             # Localization uncertainty (sigma) calculation
             # Using formula (from provided reference image):
             # sigma = sqrt( s^2 / N + (a^2/12) / N + (4 * sqrt(pi) * s^3 * b^2) / (a * N^2) )
             # where:
-            #  s = PSF Gaussian sigma (px) -> estimated from detected radius: s = rad / sqrt(2)
-            #  N = total photons (we use net signal as estimate)
-            #  b = background per pixel (we use bg_median)
+            #  s = PSF Gaussian sigma (px) -> use fitted sigma if available, else rad / sqrt(2)
+            #  N = total photons (we use net signal as estimate, or Gaussian amplitude * 2*pi*sigma^2)
+            #  b = background per pixel (we use bg_median or fitted background)
             #  a = pixel size (px) — default 1.0 unless overridden via CLI
             try:
-                s = float(rad) / np.sqrt(2.0)
-                N = float(net)
-                b = float(bmed)
+                # Prefer fitted sigma if fit succeeded
+                if gauss_result['success'] and not np.isnan(gauss_result['sigma']):
+                    s = float(gauss_result['sigma'])
+                    # Integrated Gaussian intensity: amplitude * 2 * pi * sigma^2
+                    N = float(gauss_result['amplitude']) * 2 * np.pi * (s ** 2)
+                    b = float(gauss_result['background'])
+                else:
+                    s = float(rad) / np.sqrt(2.0)
+                    N = float(net)
+                    b = float(bmed)
+                
                 a = float(run_pipeline._px_size) if hasattr(run_pipeline, '_px_size') else 1.0
                 if N > 0:
                     term1 = (s ** 2) / N
@@ -313,6 +418,12 @@ def run_pipeline(path, out_csv=None, radius=3, min_sigma=1, max_sigma=5, thresho
                 'raw_signal': float(signal),
                 'bg_median': float(bmed),
                 'net_signal': float(net),
+                'gauss_x': gauss_result['x'],
+                'gauss_y': gauss_result['y'],
+                'gauss_amp': gauss_result['amplitude'],
+                'gauss_sigma': gauss_result['sigma'],
+                'gauss_bg': gauss_result['background'],
+                'gauss_success': gauss_result['success'],
                 'loc_uncertainty': loc_sigma
             })
 
@@ -328,13 +439,17 @@ def run_pipeline(path, out_csv=None, radius=3, min_sigma=1, max_sigma=5, thresho
     os.makedirs(fig_dir, exist_ok=True)
 
     # plot average image with detected spots
-    plt.figure(figsize=(6, 6))
+    plt.figure(figsize=(10, 10))
     plt.imshow(avg, cmap='gray', origin='lower')
     if len(coords) > 0:
         ys = coords[:, 0]
         xs = coords[:, 1]
         plt.scatter(xs, ys, facecolors='none', edgecolors='r', s=40)
-    plt.title('Average image with detected spots')
+        # Add spot ID labels
+        for idx, (y, x) in enumerate(coords):
+            plt.annotate(str(idx), (x + 3, y + 3), color='yellow', fontsize=6, 
+                         fontweight='bold', ha='left', va='bottom')
+    plt.title(f'Average image with detected spots (n={len(coords)})')
     plt.savefig(os.path.join(fig_dir, 'avg_with_spots.png'), dpi=150)
     plt.close()
 

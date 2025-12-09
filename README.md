@@ -53,6 +53,30 @@ For each detected spot in every frame, we measure intensity using circular apert
 
 This approach accounts for local background variations and provides accurate intensity measurements even with non-uniform illumination.
 
+### 2D Gaussian PSF Fitting (Sub-pixel Localization)
+
+For each detected spot in every frame, we fit a 2D Gaussian point spread function (PSF) to achieve sub-pixel localization accuracy:
+
+$$
+I(x, y) = A \exp\left( -\frac{(x - x_0)^2 + (y - y_0)^2}{2\sigma^2} \right) + B
+$$
+
+where:
+- $(x_0, y_0)$ : sub-pixel center coordinates (`gauss_x`, `gauss_y` in CSV)
+- $A$ : peak amplitude above background (`gauss_amp`)
+- $\sigma$ : PSF Gaussian width (`gauss_sigma`)
+- $B$ : local background offset (`gauss_bg`)
+
+The fitting uses `scipy.optimize.curve_fit` with bounded parameters:
+- Fitting window: ±5 pixels (or 2× aperture radius) around each spot
+- Bounds: amplitude ≥ 0, sigma ∈ [0.3, 10] pixels
+- Success flag (`gauss_success`) indicates whether the fit converged
+
+**Benefits of Gaussian fitting:**
+- Sub-pixel position accuracy (typically 0.1–0.5 px precision)
+- More accurate intensity measurement via integrated Gaussian: $N = A \cdot 2\pi\sigma^2$
+- Direct PSF width measurement for localization uncertainty calculation
+
 ### Localization uncertainty (standard error)
 
 We compute an estimate of the localization standard error (uncertainty) for each fitted spot position following the formula shown in the project notes. In KaTeX/LaTeX notation the formula is:
@@ -63,9 +87,9 @@ $$
 
 where:
 - $\sigma$ : estimated standard error of the fitted position (same units as $a$; default pixels)
-- $s$ : estimated PSF Gaussian sigma (in pixels). In the code we approximate $s$ from the detected blob radius $r$ via $s = r/\sqrt{2}$.
-- $N$ : total number of signal photons (we use the background-subtracted aperture sum `net_signal` as an estimate)
-- $b$ : background per pixel (we use the local `bg_median` value)
+- $s$ : PSF Gaussian sigma (from 2D fit if successful, otherwise estimated from blob radius via $s = r/\sqrt{2}$)
+- $N$ : total number of signal photons (from Gaussian fit: $A \cdot 2\pi s^2$, or aperture `net_signal` if fit failed)
+- $b$ : background per pixel (from Gaussian fit `gauss_bg`, or `bg_median` if fit failed)
 - $a$ : effective pixel size (units of length per pixel, default `a = 1.0` so uncertainty is returned in pixels). Use `--px-size` to set `a` (e.g. nm/pixel) to report uncertainties in physical units.
 
 Notes:
@@ -74,7 +98,7 @@ Notes:
 
 
 ### 7. Output Generation
-- **CSV file**: Per-spot, per-frame data with columns: `frame, spot_id, y, x, radius, raw_signal, bg_median, net_signal`
+- **CSV file**: Per-spot, per-frame data with columns: `frame, spot_id, y, x, radius, raw_signal, bg_median, net_signal, gauss_x, gauss_y, gauss_amp, gauss_sigma, gauss_bg, gauss_success, loc_uncertainty`
 - **Detection overlay**: Average image with detected spots marked (red circles)
 - **Example traces**: Time series plots showing blinking dynamics for sample spots
 
