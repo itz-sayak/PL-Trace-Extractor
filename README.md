@@ -101,9 +101,7 @@ See `process_video.py --help` for full option descriptions.
 - 2D Gaussian PSF fitting is performed with bounded `scipy.optimize.curve_fit`. When successful, the fit provides sub-pixel coordinates and amplitude.
 - Localization uncertainty is estimated using the formula (implemented in the pipeline):
 
-$
-\sigma = \sqrt{\frac{s^{2}}{N} + \frac{a^{2}}{12N} + \frac{4\sqrt{\pi}\, s^{3} b^{2}}{a N^{2}} }
-$
+$$\sigma = \sqrt{\frac{s^{2}}{N} + \frac{a^{2}}{12N} + \frac{4\sqrt{\pi}\, s^{3} b^{2}}{a N^{2}} }$$
 
 where parameters are explained in the code and recorded in the CSV columns. Use `--px-size` to convert uncertainties into physical units (e.g. nm).
 
